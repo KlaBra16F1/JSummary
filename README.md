@@ -1,6 +1,5 @@
 # JSummary
 
-#### Video Demo:  https://youtu.be/PEYzisowss0
 ## Description:
 
 This is the final project for HarvardX CS50P course [CS50’s Introduction to Programming with Python](https://github.com/vasilisa-che/CS50P-Final-Project)
