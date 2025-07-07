@@ -1,0 +1,9 @@
+{
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.pylint",
+        "editor.formatOnSave": true
+    },
+    "python.defaultInterpreterPath": ".venv/scripts.python",
+    "python.terminal.activateEnvInCurrentTerminal": true,
+    "python.terminal.activateEnvironment": true,
+}
