@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+from ast import literal_eval
 import requests
 from tabulate2 import tabulate
 
@@ -22,21 +23,11 @@ RE_OUTPUT = ("Enter filename or path (can be .csv, .txt, .md or 'CTRL-D for scre
           r"^(?:\.{1,2}/|\.{1,2}\\)?(?:\w|\d)+(?:\w|\d|/|\\)*(?:\w|\d)+(\.csv|\.txt|\.md)$")
 
 # Other global VARS
-SYMBOL_ARRAY = "[]"
-SYMBOL_OBJECT = "{}"
-SYMBOL_ARRAY_ITEM = "[*]"
-INDENT = "  "
-MASK = 0
-TRIM = 50 # set to -1 for full length
-REDACTED = []
-REQUEST_TIMEOUT = 5
+
 TBLFMT_TXT = "mixed_grid"
 TBLFMT_MD = "github"
-# TBLFMT_SCREEN = "github"
 TBLFMT_SCREEN = "plain"
-CSV_DELIMITER = ","
-CNT = 0
-DEBUG = False
+
 
 # Datacontainer
 class Options:
@@ -66,6 +57,29 @@ class Options:
     OUTPUT = "screen"
     TREE = {}
     ITEMS_COUNT = {}
+    SYMBOL_ARRAY = "[]"
+    SYMBOL_OBJECT = "{}"
+    SYMBOL_ARRAY_ITEM = "[*]"
+    INDENT = "  "
+    MASK = 0
+    TRIM = 50 # set to -1 for full length
+    REDACTED = []
+    REQUEST_TIMEOUT = 5
+    CSV_DELIMITER = ","
+    CNT = 0
+    DEBUG = False
+
+    @classmethod
+    def print_config(cls):
+        """Prints configuration"""
+        if cls.FILE:
+            print(f"FILE: {cls.FILE}")
+        else:
+            print(f"URL: {cls.URL}")
+            print(f"HEADERS: {cls.HEADERS}")
+        print(f"OOUTPUT: {cls.OUTPUT}\n")
+
+
 
 
 def main():
@@ -77,7 +91,7 @@ def main():
 
     if Options.INTERACTIVE:
         print("Success: Loading user input:")
-    print_config()
+    Options.print_config()
 
     if Options.FILE:
         jsn = load_from_file(Options.FILE)
@@ -90,12 +104,12 @@ def main():
     if not Options.TREE:
         sys.exit("Error: Can't analyze json structure. Exiting...")
 
-    debug(f"Parsing json took {CNT:,d} recursions")
+    debug(f"Parsing json took {Options.CNT:,d} recursions")
 
     if table := get_summary_table(list_json(Options.TREE)):
 
         print(f"Sucess: Outputting table to {Options.OUTPUT}\n")
-        if not DEBUG:
+        if not Options.DEBUG:
             output(table)
     else:
         sys.exit("Error: Can't create table. Exiting...")
@@ -146,7 +160,7 @@ def get_input(verify: tuple, source= None):
         source or None
         True or False
     """
-    global CNT
+
     prompt = verify[0]
     error_message = verify[1]
     pattern = verify[2]
@@ -161,8 +175,8 @@ def get_input(verify: tuple, source= None):
         return source, True
     # Else get interactive user input
     else:
-        if CNT == 0:
-            print("User input or 'CTRL-D' to exit")
+        if Options.CNT == 0:
+            print("User input or 'q' to exit")
         try:
             source = input(prompt)
             check = re.search(pattern, source)
@@ -170,10 +184,10 @@ def get_input(verify: tuple, source= None):
                 return None, True
             if not check:
                 print(error_message)
-                CNT += 1
+                Options.CNT += 1
                 return None, False
             else:
-                CNT = 0
+                Options.CNT = 0
                 return source, True
         except EOFError:
             print("\nUser interrupted input.")
@@ -195,7 +209,7 @@ def get_user_input():
                     Options.URL = get_input(RE_URL)
                     get_headers()
                     Options.OUTPUT = get_input(RE_OUTPUT)
-                    
+
                     if Options.OUTPUT is None:
                         Options.OUTPUT = "screen"
                     break
@@ -288,44 +302,51 @@ def check_consistency(a: dict, b: dict):
 def load_config():
     """Loads commandline arguments and verifies input"""
         # Make global for changes
-    global SYMBOL_ARRAY
-    global SYMBOL_ARRAY_ITEM
-    global SYMBOL_OBJECT
-    global INDENT
-    global MASK
-    global TRIM
-    global REDACTED
-    global REQUEST_TIMEOUT
-    global CSV_DELIMITER
-    global DEBUG
+
 
     parser = argparse.ArgumentParser(description="Get a summary of a local or remote json file.")
     # Base arguments
     parser.add_argument("-i", "--interactive", action="store_true", default="true",
                         help="Interactive version with user input. Default choice.")
     parser.add_argument("-f", "--file", type=str, default=None,
-                        help="Enter the filename or path to a json file. Requires '--output'. Overrides interactive version.")
+                        help="Enter the filename or path to a json file. Requires '--output." +
+                        "Overrides interactive version.")
     parser.add_argument("-u", "--url", type=str, default=None,
-                        help="Enter the url to a json file. Requires '--output'. Overrides interactive version.\n" \
-                        "If your API key is part of the url, you can include it. Otherwise use '--header' for header-data.")
-    parser.add_argument("-H", "--header", type=str, default=None, 
-                        help="Enter HTTP headers in the format \"{ 'key1': 'value1', 'key2': 'value2', ...}\"")
+                        help="Enter the url to a json file. Requires '--output'." +
+                        "Overrides interactive version.\n" \
+                        "If your API key is part of the url, you can include it." + 
+                        "Otherwise use '--header' for header-data.")
+    parser.add_argument("-H", "--header", type=str, default=None,
+                        help="Enter HTTP headers in the format \"{ 'key1': 'value1'," +
+                        "'key2': 'value2', ...}\"")
     parser.add_argument("-o", "--output", type=str, default=None,
-                        help="Enter the filename or path your output file. Allowed formats are .txt, .csv and .md. Required by '--file' and '--url'.")
+                        help="Enter the filename or path your output file. Allowed formats are" +
+                        ".txt, .csv and .md. Required by '--file' and '--url'.")
     # Optional arguments
     parser.add_argument("-d","--delimiter", type=str, default=None, help="Change the csv delimiter")
-    parser.add_argument("-A", "--array", type=str, default=None, help="Change the symbol for arrays. Default: '[]'")
-    parser.add_argument("-a", "--arrayitem", type=str, default=None, help="Change the symbol for arrays. Default: '[*]'")
-    parser.add_argument("-O", "--object", type=str, default=None, help="Change the symbol for object. Default: '{}'")
-    parser.add_argument("-I", "--indent", type=str, default=None, help="Change the type of indent. Default: '  '")
-    parser.add_argument("-M", "--mask", type=int, default=None, help="Mask the first n-characters from the example row.")
-    parser.add_argument("-T", "--trim", type=int, default=None, help="Trim example output to n-characters. Will add '...' if trimming. Default 20. Set -1 for full lenght output")
-    parser.add_argument("-R", "--redacted", type=str, nargs="*", default=None, 
-    help="Enter keys you want to mask completely. I.E. for 'results.[].user.password' enter 'password' to mask that entry.")
-    parser.add_argument("-t", "--timeout", type=float, default=None, help="Add a custom timeout for http requests")
-    parser.add_argument("-D", "--debug", action="store_true", default=False, help="Enable debug comments. Not fully implemented yet.")
+    parser.add_argument("-A", "--array", type=str, default=None,
+                        help="Change the symbol for arrays. Default: '[]'")
+    parser.add_argument("-a", "--arrayitem", type=str, default=None,
+                        help="Change the symbol for arrays. Default: '[*]'")
+    parser.add_argument("-O", "--object", type=str, default=None,
+                        help="Change the symbol for object. Default: '{}'")
+    parser.add_argument("-I", "--indent", type=str, default=None,
+                        help="Change the type of indent. Default: '  '")
+    parser.add_argument("-M", "--mask", type=int, default=None,
+                        help="Mask the first n-characters from the example row.")
+    parser.add_argument("-T", "--trim", type=int, default=None,
+                        help="Trim example output to n-characters. Will add '...' if trimming." +
+                        "Default 20. Set -1 for full lenght output")
+    parser.add_argument("-R", "--redacted", type=str, nargs="*", default=None,
+                        help="Enter keys you want to mask completely. I.E. for" +
+                        "'results.[].user.password'" +
+                        "enter 'password' to mask that entry.")
+    parser.add_argument("-t", "--timeout", type=float, default=None,
+                        help="Add a custom timeout for http requests")
+    parser.add_argument("-D", "--debug", action="store_true", default=False,
+                        help="Enable debug comments. Not fully implemented yet.")
     args = parser.parse_args()
-    DEBUG = args.debug
+    Options.DEBUG = args.debug
 
     # Checks and changes
 
@@ -347,33 +368,32 @@ def load_config():
     # Verify commandline arguments
     if args.header:
         try:
-            temp_headers = eval(args.header)
+            temp_headers = literal_eval(args.header)
             for k, v in temp_headers.items():
                 Options.HEADERS.update({k: v})
-        # Using generic exception here, to cover all possible eval() issues
-        except Exception as e:
+        except ValueError:
             print("Error: Invalid headers. Check for single and double quotes.\n")
-            sys.exit(parser.print_usage(e))
+            print("Trying default headers instead.")
 
     Options.OUTPUT = args.output if args.output else Options.OUTPUT
     # Making sure, that indent is off for csv
     if Options.OUTPUT.endswith(".csv"):
-        INDENT = ""
+        Options.INDENT = ""
 
     # Setting the rest of the cli arguments if available
-    SYMBOL_ARRAY = args.array if args.array else SYMBOL_ARRAY
-    SYMBOL_ARRAY_ITEM = args.arrayitem if args.arrayitem else SYMBOL_ARRAY_ITEM
-    SYMBOL_OBJECT = args.object if args.object else SYMBOL_OBJECT
-    INDENT = args.indent if args.indent else INDENT
-    MASK = args.mask if args.mask else MASK
-    TRIM = args.trim if args.trim else TRIM
-    REQUEST_TIMEOUT = args.timeout if args.timeout else REQUEST_TIMEOUT
-    CSV_DELIMITER = args.delimiter if args.delimiter else CSV_DELIMITER
+    Options.SYMBOL_ARRAY = args.array if args.array else Options.SYMBOL_ARRAY
+    Options.SYMBOL_ARRAY_ITEM = args.arrayitem if args.arrayitem else Options.SYMBOL_ARRAY_ITEM
+    Options.SYMBOL_OBJECT = args.object if args.object else Options.SYMBOL_OBJECT
+    Options.INDENT = args.indent if args.indent else Options.INDENT
+    Options.MASK = args.mask if args.mask else Options.MASK
+    Options.TRIM = args.trim if args.trim else Options.TRIM
+    Options.REQUEST_TIMEOUT = args.timeout if args.timeout else Options.REQUEST_TIMEOUT
+    Options.CSV_DELIMITER = args.delimiter if args.delimiter else Options.CSV_DELIMITER
 
     # Get redacted keys
     if args.redacted:
         for a in args.redacted:
-            REDACTED.append(a)
+            Options.REDACTED.append(a)
 
     # Finall Test
     if (Options.FILE or Options.URL) and not (Options.FILE and Options.URL) and Options.OUTPUT:
@@ -419,7 +439,7 @@ def load_from_url(url):
     Handles HTTPError, ConnectionError, ConnectTimeout, ReadTimeout and 
     JSONDecodeError with None return -> sys.exit() in main()"""
     try:
-        req = requests.get(url, headers = Options.HEADERS, timeout=REQUEST_TIMEOUT)
+        req = requests.get(url, headers = Options.HEADERS, timeout=Options.REQUEST_TIMEOUT)
         if req.status_code != 200:
             print(f"Error: Status {req.status_code}")
             return None
@@ -448,8 +468,8 @@ def get_json_tree(data, path=""):
         path - str: Empty string in the beginng. Later a concacatinated path-structure
     Return:
         None: Function is only updating the Options.TREE dict"""
-    global CNT
-    CNT += 1
+
+    Options.CNT += 1
     # Step 1. Preparing the input path
     dot = "." if path else ""
     current_type = type(data).__name__
@@ -463,14 +483,14 @@ def get_json_tree(data, path=""):
     if "." in path:
         path_parent = path.split(".")
         for i in range(len(path_parent) -2, -1, -1):
-            if SYMBOL_ARRAY not in path_parent[i]:
+            if Options.SYMBOL_ARRAY not in path_parent[i]:
                 parent = path_parent[i]
                 break
             else:
                 parent = ""
     # Lists / Arrays
     if isinstance(data, list):
-        Options.TREE[path + dot + SYMBOL_ARRAY] = {"type": current_type,
+        Options.TREE[path + dot + Options.SYMBOL_ARRAY] = {"type": current_type,
                                                     "size": len(data), "parent": parent}
         for i in data:
             # In case a list itself contains values.
@@ -492,14 +512,15 @@ def get_json_tree(data, path=""):
                 else:
                     list_type = adjust_json_type(list_type)
 
-                count_items(path + dot + SYMBOL_ARRAY + SYMBOL_ARRAY_ITEM, list_type, i, parent)
+                count_items(path + dot + Options.SYMBOL_ARRAY +
+                            Options.SYMBOL_ARRAY_ITEM, list_type, i, parent)
 
             else:
                 # Default case for lists
-                get_json_tree(i, f"{path}{dot}{SYMBOL_ARRAY}")
+                get_json_tree(i, f"{path}{dot}{Options.SYMBOL_ARRAY}")
     # Dicts / Json objects
     elif isinstance(data, dict):
-        Options.TREE[path + dot + SYMBOL_OBJECT] = {"type": current_type,
+        Options.TREE[path + dot + Options.SYMBOL_OBJECT] = {"type": current_type,
                                                     "size": len(data), "parent": parent}
         for k,v in data.items():
             get_json_tree(v, f"{path}{dot}{k}")
@@ -527,7 +548,8 @@ def count_items(path, item_type, content, parent):
         None: Updates Options.TREE dict  
     """
     # Path exists in Tree
-    if Options.TREE.get(path, None) is not None and Options.TREE[path].get("type") not in ["array", "object"]:
+
+    if Options.TREE.get(path, None) and Options.TREE[path].get("type") not in ["array", "object"]:
         Options.TREE[path]["count"] += 1 # Add 1 to tree
         # Current Type matches existing type
         if Options.TREE[path]["type"] == item_type:
@@ -570,9 +592,9 @@ def list_json(tree):
         elements += 1 if k.count("[") > 1 else 0
         if v.get("size"):
             if v.get("type") == "list":
-                symbol = SYMBOL_ARRAY
+                symbol = Options.SYMBOL_ARRAY
             else:
-                symbol = SYMBOL_OBJECT
+                symbol = Options.SYMBOL_OBJECT
             json_summary.append({"name": k, "type": v["type"], "symbol": symbol,
                                  "size": v["size"], "parent": v["parent"]})
         else:
@@ -603,7 +625,7 @@ def get_summary_table(json_summary):
     for entry in json_summary:
         name = entry.get("name")
         # Indent, if output is not csv
-        name = INDENT * name.count(".") + name
+        name = Options.INDENT * name.count(".") + name
         entry_type = entry.get("type", "")
         size = entry.get("size", 0)
         count = entry.get("count", 0)
@@ -618,12 +640,13 @@ def get_summary_table(json_summary):
         # Masking, trimming and redacting of example cell
         if entry_type == "string":
             example = example.replace("\n","\\n")
-            if REDACTED:
+            if Options.REDACTED:
                 key = name.split(".")[-1]
-                if example and key in REDACTED:
+                if example and key in Options.REDACTED:
                     example = "*" * len(example)
             if example:
-                example = "*" * MASK + example[MASK:TRIM] + ("..." if len(example) > TRIM - (len(example) ) else "")
+                example = "*" * Options.MASK + example[Options.MASK:Options.TRIM] + (""
+                            "..." if len(example) > Options.TRIM - (len(example) ) else "")
 
         parent = entry.get("parent", None)
         consistent = entry.get("consistent", None)
@@ -631,7 +654,7 @@ def get_summary_table(json_summary):
         # Add row items count to secondary counter
         if count:
             if secondary_itemcount.get(entry_type):
-                secondary_itemcount[entry_type] += count 
+                secondary_itemcount[entry_type] += count
             else:
                 secondary_itemcount[entry_type] = count
         # create a marker for consistency check
@@ -683,19 +706,20 @@ def output(table):
         case c if Options.OUTPUT.endswith(".txt"):
             output_text(table, TBLFMT_TXT)
         case _:
-            print(tabulate(table, headers="firstrow", tablefmt=TBLFMT_SCREEN, preserve_whitespace=True))
-    c = None
+            print(tabulate(table, headers="firstrow", 
+                           tablefmt=TBLFMT_SCREEN, preserve_whitespace=True))
+    debug(c)
 
 def output_csv(table):
     """Output table to as csv file or exit on any exception"""
 
     try:
         with open(Options.OUTPUT, "w", encoding="utf-8") as file:
-            writer = csv.writer(file, delimiter=CSV_DELIMITER)
+            writer = csv.writer(file, delimiter=Options.CSV_DELIMITER)
             for row in table:
                 writer.writerow(row)
         print("Success: Writing csv file")
-    except Exception as e:
+    except (PermissionError, OSError) as e:
         sys.exit(e)
 
 def output_text(table, formatting):
@@ -706,21 +730,11 @@ def output_text(table, formatting):
                                 tablefmt=formatting, preserve_whitespace=True):
                 file.write(row)
         print("Success: Writing file")
-    except Exception as e:
+    except (PermissionError, OSError) as e:
         sys.exit(e)
 
 # Info
 
-def print_config():
-    """Print configuration"""
-    for o in sorted(dir(Options)):
-        if not o.startswith("_") and not o in {"TREE", "ITEMS_COUNT"}:
-            try:
-                print("\t", o + ":", eval(f"Options.{o}"))
-            except Exception as e:
-                print(f"Error: {e}")
-                sys.exit(1)
-    print()
 
 def debug(*args):
     """Print debug messages if a global variable 'DEBUG' is true.
@@ -731,7 +745,7 @@ def debug(*args):
         'DEBUG: arg[0] --- arg[...] --- arg[n] :::END'
     Return:
         None"""
-    if DEBUG:
+    if Options.DEBUG:
         print("DEBUG: ", end="")
         for a in args:
 
