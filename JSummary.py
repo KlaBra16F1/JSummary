@@ -1,0 +1,743 @@
+import argparse
+import csv
+import json
+import os
+import re
+import requests
+import sys
+from tabulate2 import tabulate
+
+# REGEX-Patterns and Messages
+RE_URL = ("Enter URL ('https://example.com/endpoint'): ",
+          "Invalid url",
+          r"^https?://.+")
+RE_FILE = ("Enter filename or path ('./myfolder/my.json'): ",
+          "Invalid filename or path",
+          r"^(?:\.{1,2}\/|\.{1,2}\\)?(?:\w|\d)*(?:\w|\d|\.|\/|\\)*?(?:\w|\d)+\.json$")
+RE_HEADERS = ("Enter header(s) ('key : value') - 'CTRL-D' when done: ",
+              "Invalid input", "^.+ :{1} .+$")
+RE_OUTPUT = ("Enter filename or path (can be .csv, .txt, .md or 'CTRL-D for screen'): ",
+          "Invalid filename or path",
+          r"^(?:\.{1,2}/|\.{1,2}\\)?(?:\w|\d)+(?:\w|\d|/|\\)*(?:\w|\d)+(\.csv|\.txt|\.md)$")
+
+# Other global VARS
+SYMBOL_ARRAY = "[]"
+SYMBOL_OBJECT = "{}"
+SYMBOL_ARRAY_ITEM = "[*]"
+INDENT = "  " 
+MASK = 0
+TRIM = 50 # set to -1 for full length 
+REDACTED = []
+REQUEST_TIMEOUT = 5
+TBLFMT_TXT = "mixed_grid"
+TBLFMT_MD = "github"
+# TBLFMT_SCREEN = "github"
+TBLFMT_SCREEN = "plain"
+CSV_DELIMITER = ","
+CNT = 0
+DEBUG = False
+
+# Datacontainer
+class Options:
+    """Data container for json summary.
+    
+    Variables:
+        INTERACTIVE - bool: Indicator if user input is needed and if the commandline prompt will get printed at the end of the program
+        FILE - str: Stores the filename or path of the json file. Gets set to none if input is a url.
+        URL - str: Same as FILE but for url.
+        HEADERS - dict: Stores HTTP Headers. Can be extended via user input or commandline arguments.
+        OUTPUT - str: Stores the output name or path for the output file. Default is 'screen' for CLI output.
+        TREE - dict: Container for initial recursion from get_json_tree().
+        ITEMS_COUNT - dict: Container for precise counting of json values (number, string, boolean, null). Note that strings will be separated into string, date, date-time and time. 
+    """
+    INTERACTIVE = True
+    FILE = None
+    URL = None
+    HEADERS = {
+        "Accept": "application/json"
+    }
+    OUTPUT = "screen"
+    TREE = {}
+    ITEMS_COUNT = {}
+
+
+def main():
+    """Main function of json_summary."""
+    load_config()
+
+    if Options.INTERACTIVE:
+        get_user_input()
+
+    if Options.INTERACTIVE:    
+        print("Success: Loading user input:")
+        
+    print_config()
+
+    if Options.FILE:
+        jsn = load_from_file(Options.FILE)
+    else:
+        jsn = load_from_url(Options.URL)
+    
+    if not jsn:    
+        sys.exit("Error: Can't load json data. Exiting...")
+
+    get_json_tree(jsn)
+    if not Options.TREE:
+        sys.exit("Error: Can't analyze json structure. Exiting...")
+
+    debug(f"Parsing json took {CNT:,d} recursions")
+
+    if table := get_summary_table(list_json(Options.TREE)):
+
+        print(f"Sucess: Outputting table to {Options.OUTPUT}\n")
+        if not DEBUG:
+            output(table)
+    else:
+        sys.exit("Error: Can't create table. Exiting...")
+    
+    print(f"\nSuccess: Summary complete.\n")
+
+    if Options.INTERACTIVE:
+        str_input = f"-f {Options.FILE}" if Options.FILE else f"-u {Options.URL}"
+        str_output = f"-o {Options.OUTPUT}" if Options.OUTPUT != "screen" else " "
+        str_header = f"-H \"{Options.HEADERS}\"" if Options.URL and len(Options.HEADERS) > 1 else ""
+        print(f"The commandline prompt for your request is:\n",
+              f"\tpython jspn_summary.py {str_input} {str_output} {str_header}",
+              "\n\nRun 'python json_summary.py -' for more options.\n")
+
+# Input & Verification
+def user_input(func):
+    """Looped wrapper function for get_input().
+
+    Args:
+        see get_input()
+    Return:
+        user_input - str: Either None (if not verified in get_input) or valid value for wrapper return.
+        input_check - bool: Signal if while loop can be stopped.
+    """
+    def wrapped(*args):
+            
+            input_check = False
+            while input_check == False:
+                user_input, input_check = func(*args)
+                if input_check:
+                    return user_input
+                else:
+                     continue
+            
+    return wrapped
+
+@user_input
+def get_input(verify: tuple, source= None):
+    """Decorator for user_input. Also works as a validator for the commandline arguments file, url and header.
+
+    Args:
+        verify - tuple: Three value tuple. [0] = prompt message (str), [1] = error message (str), [2] regex pattern (raw string)
+        source - str: Value to be checked. Only needed for verification of commandline arguments without user input. In this case TRUE is returned in any case to escape the while loop of the wrapper.
+    Return:
+        source or None
+        True or False
+    """
+    global CNT
+    prompt = verify[0]
+    error_message = verify[1]
+    pattern = verify[2]
+    cmd = True if source else False
+    
+    # If url is from cli-flags, second True is returned either way to escape loop.
+    if cmd:
+        check = re.search(pattern, source)
+        if not check:
+             print(error_message)
+             print("dbg", re.search(pattern, source), source)
+             return None, True
+        else:
+             return source, True
+    # Else get interactive user input
+    else:
+        if CNT == 0:
+            print("User input or 'CTRL-D' to exit")
+        try:
+            source = input(prompt)
+            check = re.search(pattern, source)
+            if not check:
+                print(error_message)
+                CNT += 1
+                return None, False
+            else:
+                CNT = 0
+                return source, True
+        except EOFError:
+            print("\nUser interrupted input.")
+            return None, True
+
+def get_user_input():
+    """Collects neccessary user input for file and url input"""
+    while True :
+        try:
+            choice = input("Import Json from (f)ile, (u)rl or (q)uit: ")
+            match choice:
+                case "f":
+                    Options.FILE = get_input(RE_FILE)
+                    Options.OUTPUT = get_input(RE_OUTPUT)
+                    if Options.OUTPUT is None:
+                        Options.OUTPUT = "screen"
+                    break
+                case "u":
+                    Options.URL = get_input(RE_URL)
+                    get_headers()
+                    Options.OUTPUT = get_input(RE_OUTPUT)
+
+                    if Options.OUTPUT is None:
+                        Options.OUTPUT = "screen"
+                    break
+                case "q":
+                    sys.exit("Good bye.")
+        except EOFError:
+            sys.exit("Good bye.")
+    
+def get_headers():
+    """Sub function of get_user_input(). Lists all available headers, calls get_inout() and repeats until exit with 'CTRL-D'"""
+    header = True
+    while header is not None:
+        print("Current headers:")
+        for k,v in Options.HEADERS.items():
+            print(f"\t{k}: {v}")
+        print()
+        header = get_input(RE_HEADERS)
+        if header:
+            header = header.split(" ")
+            if len(header) == 3:
+                print(f"Adding {header[0]}: {header[2]} to headers\n")
+                Options.HEADERS.update({header[0]: header[2]})
+            else:
+                print("Error: Couldn't add header. Make sure you leave a space before and after ' : '")
+                header = None
+
+def check_date_time(s: str):
+    """Detects date, date-time and time patterns in a string
+
+    Args:
+        s - string: Input string that will be checked
+    Return:
+        str: String with value 'date', 'date-time', 'time' or 'string'
+    """
+    pattern_date = r"^\d{1,4}[-\/\.]{1}\d{1,2}[-\/\.]\d{1,4}$"
+    pattern_date_time = r"^\d{1,4}[-\/]{1}\d{1,2}[-\/]\d{1,4}[ T]\d{1,2}:\d{1,2}"
+    pattern_time = r"^\d{1,2}:\d{1,2}"
+    if re.search(pattern_date, s):
+        return "date"
+    elif re.search(pattern_date_time, s):
+        return "date-time"
+    elif re.search(pattern_time, s):
+        return("time")
+    else:
+        return "string"
+    
+def adjust_json_type(t: str):
+    """Swap python types to json types
+
+    Args:
+        s - str: String valie of python type
+    Return:
+        t - str: String value of json type"""
+    match t:
+        case "NoneType":
+            t = "null"
+        case "list":
+            t = "array"
+        case "dict":
+            t = "object"
+        case "int":
+            t = "number"
+        case "float":
+            t = "number"
+        case "bool":
+            t = "boolean"
+        case _:
+            pass
+    return t
+
+def check_consistency(a: dict, b: dict):
+    """Checks if a count mismatch results from 'null' values
+    
+    Args:
+        a - dict: Options.ITEMS_COUNT
+        b - dict: Counted items from the output table
+    Return:
+        bool: True if mismatch is likely from 'null' values, otherwise False"""
+    
+    difference = {}
+    for k, v in a.items():
+        difference[k] = v - b.get(k, 0)
+    nulls = abs(difference.get("null", 0))
+    rest = sum([abs(v) for (k, v) in difference.items() if k != "null"])
+    debug("Difference", difference)
+    return nulls == rest
+    
+
+# Program
+def load_config():
+    """Loads commandline arguments and verifies input"""
+        # Make global for changes
+    global SYMBOL_ARRAY
+    global SYMBOL_ARRAY_ITEM
+    global SYMBOL_OBJECT
+    global INDENT
+    global MASK
+    global TRIM
+    global REDACTED
+    global REQUEST_TIMEOUT
+    global CSV_DELIMITER
+    global DEBUG
+
+    parser = argparse.ArgumentParser(description="Get a summary of a local or remote json file.")
+    # Base arguments
+    parser.add_argument("-i", "--interactive", action="store_true", default="true", 
+                        help="Interactive version with user input. Default choice.")
+    parser.add_argument("-f", "--file", type=str, default=None,
+                        help="Enter the filename or path to a json file. Requires '--output'. Overrides interactive version.")
+    parser.add_argument("-u", "--url", type=str, default=None, 
+                        help="Enter the url to a json file. Requires '--output'. Overrides interactive version.\n" \
+                        "If your API key is part of the url, you can include it. Otherwise use '--header' for header-data.")
+    parser.add_argument("-H", "--header", type=str, default=None, 
+                        help="Enter HTTP headers in the format \"{ 'key1': 'value1', 'key2': 'value2', ...}\"")
+    parser.add_argument("-o", "--output", type=str, default=None,
+                        help="Enter the filename or path your output file. Allowed formats are .txt, .csv and .md. Required by '--file' and '--url'.")
+    # Optional arguments
+    parser.add_argument("-d","--delimiter", type=str, default=None, help="Change the csv delimiter")
+    parser.add_argument("-A", "--array", type=str, default=None, help="Change the symbol for arrays. Default: '[]'")
+    parser.add_argument("-a", "--arrayitem", type=str, default=None, help="Change the symbol for arrays. Default: '[*]'")
+    parser.add_argument("-O", "--object", type=str, default=None, help="Change the symbol for object. Default: '{}'")
+    parser.add_argument("-I", "--indent", type=str, default=None, help="Change the type of indent. Default: '  '")
+    parser.add_argument("-M", "--mask", type=int, default=None, help="Mask the first n-characters from the example row.")
+    parser.add_argument("-T", "--trim", type=int, default=None, help="Trim example output to n-characters. Will add '...' if trimming. Default 20. Set -1 for full lenght output")
+    parser.add_argument("-R", "--redacted", type=str, nargs="*", default=None, 
+    help="Enter keys you want to mask completely. I.E. for 'results.[].user.password' enter 'password' to mask that entry.")
+    parser.add_argument("-t", "--timeout", type=float, default=None, help="Add a custom timeout for http requests")
+    parser.add_argument("-D", "--debug", action="store_true", default=False, help="Enable debug comments. Not fully implemented yet.")
+    
+    args = parser.parse_args()
+    DEBUG = args.debug
+
+
+
+
+    # Checks and changes
+
+    if args.file or args.url:
+        Options.INTERACTIVE = False
+        if args.file:
+            # Verification filename or path
+            Options.FILE = get_input(RE_FILE, args.file)
+            Options.URL = None
+            Options.HEADERS = None
+        if args.url:
+            # Verification url
+            Options.URL = get_input(RE_URL, args.url)
+            Options.FILE = None
+    elif args.file and args.url:
+        print("Error: You can either load a local json file or a remote one.")
+        sys.exit(parser.print_usage())
+    
+    # Verify commandline arguments
+    if args.header:
+        try:
+            temp_headers = eval(args.header)
+            for k, v in temp_headers.items():
+                Options.HEADERS.update({k: v})
+        # Using generic exception here, to cover all possible eval() issues
+        except Exception as e:
+            print("Error: Invalid headers. Check for single and double quotes.\n")
+            sys.exit(parser.print_usage())
+
+    Options.OUTPUT = args.output if args.output else Options.OUTPUT
+    
+    # Making sure, that indent is off for csv
+    if Options.OUTPUT.endswith(".csv"):
+        INDENT = ""
+
+    # Setting the rest of the cli arguments if available
+    SYMBOL_ARRAY = args.array if args.array else SYMBOL_ARRAY
+    SYMBOL_ARRAY_ITEM = args.arrayitem if args.arrayitem else SYMBOL_ARRAY_ITEM
+    SYMBOL_OBJECT = args.object if args.object else SYMBOL_OBJECT
+    INDENT = args.indent if args.indent else INDENT
+    MASK = args.mask if args.mask else MASK
+    TRIM = args.trim if args.trim else TRIM
+    REQUEST_TIMEOUT = args.timeout if args.timeout else REQUEST_TIMEOUT
+    CSV_DELIMITER = args.delimiter if args.delimiter else CSV_DELIMITER
+
+
+
+    # Get redacted keys
+    if args.redacted:
+        for a in args.redacted:
+            REDACTED.append(a)
+
+    # Finall Test
+    if (Options.FILE or Options.URL) and not (Options.FILE and Options.URL) and Options.OUTPUT:
+        print()
+        print("Success: Loading commandline arguments:")
+        pass
+    elif Options.INTERACTIVE:
+        pass 
+    else:
+        print("Error: Invalid configuration")
+        sys.exit(parser.print_usage())
+
+def load_from_file(file: str):
+    """Loads and parses a local json file
+
+    Args:
+        file - str: String with filename or path
+    Return:
+        jsn: Json decoded object.
+    Handles FILENOTFOUND and JSONDecodeError with sys.exit()"""
+    if os.name != "nt":
+        file = file.replace("\\","/")
+    try:
+        with open(file, "r") as file:
+            jsn = file.read()
+            print("Success: File loaded")
+    except FileNotFoundError:
+        sys.exit(f"File not found in {file}")
+    
+    try:
+        jsn = json.loads(jsn)
+        print("Success: JSON decoded from file")
+    except json.JSONDecodeError:
+        sys.exit("Error: Couldn't parse json file")
+
+    return jsn
+
+def load_from_url(url):
+    """HTTP request and json decoding
+
+    Args:
+        url - str: String with url
+    Return:
+        jsn: Json decoded object
+    Handles HTTPError, ConnectionError, ConnectTimeout, ReadTimeout and JSONDecodeError with None return -> sys.exit() in main()"""
+    try:
+        req = requests.get(url, headers = Options.HEADERS, timeout=REQUEST_TIMEOUT)
+        if req.status_code != 200:
+            print(f"Error: Status {req.status_code}")
+            return None
+        else:
+            print(f"Sucess: Loading Data from {Options.URL}")
+
+    except requests.HTTPError as e:
+        print(f"Error: {e.args[0]}")
+        return None
+    except (requests.ConnectTimeout, requests.ConnectionError, requests.ReadTimeout):
+        print(f"Error: Timeout from {Options.URL}")
+        return None
+
+    try:
+        print("Success: Parsing json data")
+        return req.json()
+    except json.JSONDecodeError:
+        print("Error: Couldn't parse json file\n")
+        return None
+
+def get_json_tree(data, path=""):
+    """Recursion through JSON structure
+
+    Args:
+        data: Initially a json object. Later any type that is inside the jason values.
+        path - str: Empty string in the beginng. Later a concacatinated path-structure
+    Return:
+        None: Function is only updating the Options.TREE dict"""
+    global CNT
+    CNT += 1
+    # Step 1. Preparing the input path
+    dot = "." if path else ""
+    current_type = type(data).__name__
+    if isinstance(data, str):
+        current_type = check_date_time(data)
+    else:
+        current_type = adjust_json_type(current_type)
+
+    parent = ""
+    path_parent = None
+    if "." in path:
+        path_parent = path.split(".")
+        for i in range(len(path_parent) -2, -1, -1):
+            if SYMBOL_ARRAY not in path_parent[i]:
+                parent = path_parent[i]
+                break
+            else:
+                parent = ""
+    # Lists / Arrays
+    if isinstance(data, list):
+        Options.TREE[path + dot + SYMBOL_ARRAY] = {"type": current_type, "size": len(data), "parent": parent}
+        for i in data:
+            """
+            In case a list itself contains values. Assuming that the content of the list is type-consistent.
+            """
+            if type(i).__name__ not in ["list", "dict"]:
+
+                list_type = type(i).__name__
+                if isinstance(i, str):
+                    list_type = check_date_time(i)
+                else:
+                    list_type = adjust_json_type(list_type)
+                
+                if path and path_parent:
+                    parent = path_parent[-1]
+                else:
+                    parent = ""
+
+                if isinstance(i, str):
+                    list_type = check_date_time(i)
+                else:
+                    list_type = adjust_json_type(list_type)
+
+                count_items(path + dot + SYMBOL_ARRAY + SYMBOL_ARRAY_ITEM, list_type, i, parent)
+
+            else:
+                """
+                Default case for lists :)
+                """
+                get_json_tree(i, f"{path}{dot}{SYMBOL_ARRAY}")
+    # Dicts / Json objects
+    elif isinstance(data, dict):
+        Options.TREE[path + dot + SYMBOL_OBJECT] = {"type": current_type, "size": len(data), "parent": parent}
+        for k,v in data.items():
+            get_json_tree(v, f"{path}{dot}{k}") 
+
+    # Endpoints / Leafs with actual data      
+    else:
+        # Process and count existing entries
+        if Options.TREE.get(path):
+            item_type = Options.TREE[path].get("type")
+
+            count_items(path, current_type, data, parent)
+
+        # Process new entries
+        else:
+ 
+            count_items(path, current_type, data, parent)
+
+def count_items(path, item_type, content, parent):
+    """Sub-function of get_json_tree() handling the counting logic
+    
+    Args:
+        path - str: curren path of the recursion. Is key for Options.TREE
+        item_type - str: Current dataype in the pipeline
+        content: Current value of the json object
+        parent str: Name of the parent object
+    Return:
+        None: Updates Options.TREE dict  
+    """
+    # Path exists in Tree
+    if Options.TREE.get(path, None) is not None and Options.TREE[path].get("type") not in ["array", "object"]:
+        Options.TREE[path]["count"] += 1 # Add 1 to tree
+        # Current Type matches existing type
+        if Options.TREE[path]["type"] == item_type:
+            if Options.ITEMS_COUNT.get(item_type, None):
+                Options.ITEMS_COUNT[item_type] += 1 # Add 1 to item_count
+                
+            else:
+                Options.ITEMS_COUNT[item_type] = 1  # Or create 
+        else:
+            # type is different
+            old_type = Options.TREE[path]["type"]
+            old_example = Options.TREE[path]["example"]
+            # Only change type and example if it was "null"
+            Options.TREE[path]["type"] = item_type if old_type == "null" else old_type
+            Options.TREE[path]["example"] = content if old_type == "null" else old_example
+            Options.TREE[path]["consistent"] = False # Switch misex to true in any case
+            # Item-count exists
+            if Options.ITEMS_COUNT.get(item_type):
+                Options.ITEMS_COUNT[item_type] += 1 # add 1
+            else:
+                Options.ITEMS_COUNT[item_type] = 1 # create new item
+    else:
+        Options.TREE[path] = {"type": item_type, "count":  1, "example": content, "parent": parent, "consistent": True}
+        if not Options.ITEMS_COUNT.get(item_type, None):
+            Options.ITEMS_COUNT[item_type] = 1
+        else:
+            Options.ITEMS_COUNT[item_type] += 1
+
+def list_json(tree):
+    """Creates an aggregated list of dicts from the Options.TREE dict
+
+    Args:
+        tree - dict: The Options.TREE dict
+    Return:
+        json_summary - list: Contains the aggregated values"""
+        
+    json_summary = []
+    # Note: Enumerate requires k and v in brackets
+    for k, v in tree.items():
+        elements = k.count(".")
+        elements += 1 if k.count("[") > 1 else 0
+        if v.get("size"):
+            if v.get("type") == "list":
+                symbol = SYMBOL_ARRAY
+            else:
+                symbol = SYMBOL_OBJECT
+            json_summary.append({"name": k, "type": v["type"], "symbol": symbol, "size": v["size"], "parent": v["parent"]})
+        else:
+            elements += 1
+            example = v.get("example", None)
+            count = v.get("count", None)
+            json_summary.append({"name": k, "type": v["type"],"consistent": v.get("consistent", None), "count": count, "example": example, "parent": v["parent"]})
+    
+    return json_summary
+    
+def get_summary_table(json_summary):
+    """Creates the final summary table for csv or tabulate2 output
+    
+    Args:
+        json_summary - list: The list of dicts created in reduce_json()
+    Return:
+        table - list: List from json_summary and Options.ITEM_COUNT
+        
+    Note that all the modifications INDENT, MASK, TRIM and REDACTED are handled here"""
+
+    table = []
+    header = ["NAME", "TYPE", "SIZE", "COUNT", "EXAMPLE", "CONSITENT", "PARENT"]
+    table.append(header)
+    sum_item_count = 0
+    secondary_itemcount = {}
+    is_consitent = True
+    for entry in json_summary:
+        name = entry.get("name")
+        # Indent, if output is not csv
+        name = INDENT * name.count(".") + name
+        entry_type = entry.get("type", "")
+        size = entry.get("size", 0)
+        count = entry.get("count", 0)
+
+        # double checking
+        if count is None:
+            count = 0
+        if size is None:
+            size = 0
+
+        example = entry.get("example", "N/A")
+        # Masking, trimming and redacting of example cell
+        if entry_type == "string":
+            example = example.replace("\n","\\n")
+            if REDACTED:
+                key = name.split(".")[-1]
+                if example and key in REDACTED:
+                    example = "*" * len(example)
+            if example:
+                example = "*" * MASK + example[MASK:TRIM] + ("..." if len(example) > TRIM - (len(example) ) else "")
+        
+        parent = entry.get("parent", None)
+        consistent = entry.get("consistent", None)
+
+        # Add row items count to secondary counter
+        if count:
+            if secondary_itemcount.get(entry_type):
+                secondary_itemcount[entry_type] += count 
+            else:
+                secondary_itemcount[entry_type] = count
+        # create a marker for consistency check
+        if not consistent and entry_type not in ["array", "object"]:
+            is_consitent = False
+
+        # Second counter for verification of Options.ITEMS_COUNT
+        if isinstance(count, int):
+            sum_item_count += count
+
+        row = [name, entry_type, f"{size:,d}" if size > 0 else None, f"{count:,d}" if count > 0 else None, example, consistent, parent]
+        table.append(row)
+
+    # Append statistics to the table
+    table.append([None, None, None, None, None, None])
+    for k, v in sorted(Options.ITEMS_COUNT.items(), key=lambda v: v[1], reverse=True):
+        table.append([f"Sum of {k}:",None, None, f"{v:,d}", None, None, None])
+    item_sum = sum([c for c in Options.ITEMS_COUNT.values()])
+    table.append([None, None, None, None, None, None])
+
+    checksum = 0 if sum_item_count == item_sum else f"Count mismatch ({item_sum:,d}/{sum_item_count:,d})"
+    table.append(["Sum of all items:", None, None, f"{sum_item_count:,d}" if sum_item_count > 0 else None, f"{checksum:,d}" if checksum > 0 else None, None, None])
+
+    debug("Results ITEM_COUNT", Options.ITEMS_COUNT)
+    debug("Results from rows", secondary_itemcount)
+    if not is_consitent:
+        result = check_consistency(Options.ITEMS_COUNT, secondary_itemcount)
+        debug("Null mismatch =", result)
+
+        if result == True:
+            level = "INFO:"
+            msg = ["Inconsistent data detected.", "Most likely from occasional 'null' values."]
+        else:
+            level = "WARNING:"
+            msg = ["Inconsistent data detected.", "Most likely due to mixed types in json values"]
+        table.append([level, None, None, None, msg[0], None, None])
+        table.append([None, None, None, None, msg[1], None, None])
+    return table
+
+def output(table):
+    """Route to different output methods"""
+
+    match Options.OUTPUT:
+        case c if Options.OUTPUT.endswith(".csv"):
+            output_csv(table)
+        case m if Options.OUTPUT.endswith(".md"):
+            output_text(table, TBLFMT_MD)
+        case t if Options.OUTPUT.endswith(".txt"):
+            output_text(table, TBLFMT_TXT)
+        case _:
+            print(tabulate(table, headers="firstrow", tablefmt=TBLFMT_SCREEN, preserve_whitespace=True))
+
+def output_csv(table):
+    """Output table to as csv file or exit on any exception"""
+
+    try:
+        with open(Options.OUTPUT, "w") as file:
+            writer = csv.writer(file, delimiter=CSV_DELIMITER)
+            for row in table:
+                writer.writerow(row)
+        print("Success: Writing csv file")
+    except Exception as e:
+        sys.exit(e)
+
+def output_text(table, format):
+    """Output table to as txt or md file or exit on any exception"""
+    try:
+        with open(Options.OUTPUT, "w") as file:
+            for row in tabulate(table, headers="firstrow", tablefmt=format, preserve_whitespace=True):
+                file.write(row)
+        print("Success: Writing file")
+    except Exception as e:
+        sys.exit(e)
+
+# Info
+
+def print_config():
+    """Print configuration"""
+    for o in sorted(dir(Options)):
+        if not o.startswith("_") and not o in {"TREE", "ITEMS_COUNT"}:
+            try:
+                print("\t", o + ":", eval(f"Options.{o}"))
+            except Exception:
+                print("Error: UNKNOWN")
+                sys.exit(1)
+    print()
+
+def debug(*args):
+    """Print debug messages if a global variable 'DEBUG' is true.
+    
+    Args:
+        *args
+    Side effects:
+        'DEBUG: arg[0] --- arg[...] --- arg[n] :::END'
+    Return:
+        None"""
+    
+    if DEBUG:
+        print("DEBUG: ", end="")
+        for a in args:
+
+            print(a, end=" --- ")
+        print("   :::End")
+
+if __name__ == "__main__":
+    main()
