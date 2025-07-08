@@ -79,6 +79,11 @@ class Options:
             print(f"HEADERS: {cls.HEADERS}")
         print(f"OOUTPUT: {cls.OUTPUT}\n")
 
+    @classmethod
+    def is_debug(cls):
+        """Returns if programm is in debug mode"""
+        return cls.DEBUG
+
 
 
 
@@ -109,7 +114,7 @@ def main():
     if table := get_summary_table(list_json(Options.TREE)):
 
         print(f"Sucess: Outputting table to {Options.OUTPUT}\n")
-        if not Options.DEBUG:
+        if not Options.is_debug():
             output(table)
     else:
         sys.exit("Error: Can't create table. Exiting...")
@@ -292,14 +297,87 @@ def check_consistency(a: dict, b: dict):
         a - dict: Options.ITEMS_COUNT
         b - dict: Counted items from the output table
     Return:
-        bool: True if mismatch is likely from 'null' values, otherwise False"""
+        level - str: 'Info' or 'Warning'
+        msg - list: Infomessage for 2 tablerows"""
     difference = {}
     for k, v in a.items():
         difference[k] = v - b.get(k, 0)
     nulls = abs(difference.get("null", 0))
     rest = sum(abs(v) for (k, v) in difference.items() if k != "null")
     debug("Difference", difference)
-    return nulls == rest
+    if nulls == rest:
+        level = "INFO:"
+        msg = ["Inconsistent data detected.", "Most likely from occasional 'null' values."]
+    else:
+        level = "WARNING:"
+        msg = ["Inconsistent data detected.", "Most likely due to mixed types in json values"]
+    return level, msg
+
+def table_statistics(table, is_consistent, sum_item_count, secondary_itemcount):
+    """Add statistics to table"""
+    table.append([None, None, None, None, None, None])
+    for k, v in sorted(Options.ITEMS_COUNT.items(), key=lambda v: v[1], reverse=True):
+        table.append([f"Sum of {k}:",None, None, f"{v:,d}", None, None, None])
+
+        item_sum = sum(list(Options.ITEMS_COUNT.values()))
+        debug(item_sum)
+        table.append([None, None, None, None, None, None])
+
+        checksum = 0 if sum_item_count == item_sum else ("Count mismatch" +
+                                                         f"{item_sum:,d}/{sum_item_count:,d}")
+        table.append(["Sum of all items:", None, None,
+                    f"{sum_item_count:,d}" if sum_item_count > 0 else None,
+                    f"{checksum:,d}" if checksum > 0 else None, None, None])
+
+        debug("Results ITEM_COUNT", Options.ITEMS_COUNT)
+        debug("Results from rows", secondary_itemcount)
+        if not is_consistent:
+            level, msg = check_consistency(Options.ITEMS_COUNT, secondary_itemcount)
+            table.append([level, None, None, None, msg[0], None, None])
+            table.append([None, None, None, None, msg[1], None, None])
+    return table
+
+def get_parent(path: str):
+    """Get parent from a dot-separated string"""
+    parent = ""
+    path_parent = None
+    if "." in path:
+        path_parent = path.split(".")
+        for i in range(len(path_parent) -2, -1, -1):
+            if Options.SYMBOL_ARRAY not in path_parent[i]:
+                parent = path_parent[i]
+                break
+
+    return parent, path_parent
+
+def process_list_items(data, path, path_parent, dot):
+    """Subfunction of get_json_tree() for list items"""
+    for i in data:
+        # In case a list itself contains values.
+        # Assuming that the content of the list is type-consistent.
+        if type(i).__name__ not in ["list", "dict"]:
+
+            list_type = type(i).__name__
+            if isinstance(i, str):
+                list_type = check_date_time(i)
+            else:
+                list_type = adjust_json_type(list_type)
+            if path and path_parent:
+                parent = path_parent[-1]
+            else:
+                parent = ""
+
+            if isinstance(i, str):
+                list_type = check_date_time(i)
+            else:
+                list_type = adjust_json_type(list_type)
+
+            count_items(path + dot + Options.SYMBOL_ARRAY +
+                        Options.SYMBOL_ARRAY_ITEM, list_type, i, parent)
+
+        else:
+            # Default case for lists
+            get_json_tree(i, f"{path}{dot}{Options.SYMBOL_ARRAY}")
 
 # Program
 def load_config():
@@ -474,46 +552,14 @@ def get_json_tree(data, path=""):
     else:
         current_type = adjust_json_type(current_type)
 
-    parent = ""
-    path_parent = None
-    if "." in path:
-        path_parent = path.split(".")
-        for i in range(len(path_parent) -2, -1, -1):
-            if Options.SYMBOL_ARRAY not in path_parent[i]:
-                parent = path_parent[i]
-                break
+    parent, path_parent = get_parent(path)
 
-            parent = ""
     # Lists / Arrays
     if isinstance(data, list):
         Options.TREE[path + dot + Options.SYMBOL_ARRAY] = {"type": current_type,
                                                     "size": len(data), "parent": parent}
-        for i in data:
-            # In case a list itself contains values.
-            # Assuming that the content of the list is type-consistent.
-            if type(i).__name__ not in ["list", "dict"]:
+        process_list_items(data, path, path_parent, dot)
 
-                list_type = type(i).__name__
-                if isinstance(i, str):
-                    list_type = check_date_time(i)
-                else:
-                    list_type = adjust_json_type(list_type)
-                if path and path_parent:
-                    parent = path_parent[-1]
-                else:
-                    parent = ""
-
-                if isinstance(i, str):
-                    list_type = check_date_time(i)
-                else:
-                    list_type = adjust_json_type(list_type)
-
-                count_items(path + dot + Options.SYMBOL_ARRAY +
-                            Options.SYMBOL_ARRAY_ITEM, list_type, i, parent)
-
-            else:
-                # Default case for lists
-                get_json_tree(i, f"{path}{dot}{Options.SYMBOL_ARRAY}")
     # Dicts / Json objects
     elif isinstance(data, dict):
         Options.TREE[path + dot + Options.SYMBOL_OBJECT] = {"type": current_type,
@@ -617,7 +663,7 @@ def get_summary_table(json_summary):
     table.append(header)
     sum_item_count = 0
     secondary_itemcount = {}
-    is_consitent = True
+    is_consistent = True
     for entry in json_summary:
         name = entry.get("name")
         # Indent, if output is not csv
@@ -644,7 +690,6 @@ def get_summary_table(json_summary):
                 example = "*" * Options.MASK + example[Options.MASK:Options.TRIM] + (""
                             "..." if len(example) > Options.TRIM - (len(example) ) else "")
 
-        parent = entry.get("parent", None)
         consistent = entry.get("consistent", None)
 
         # Add row items count to secondary counter
@@ -655,44 +700,20 @@ def get_summary_table(json_summary):
                 secondary_itemcount[entry_type] = count
         # create a marker for consistency check
         if not consistent and entry_type not in ["array", "object"]:
-            is_consitent = False
+            is_consistent = False
 
         # Second counter for verification of Options.ITEMS_COUNT
         if isinstance(count, int):
             sum_item_count += count
 
         row = [name, entry_type, f"{size:,d}" if size > 0 else None,
-               f"{count:,d}" if count > 0 else None, example, consistent, parent]
+               f"{count:,d}" if count > 0 else None, example, consistent,
+               entry.get("parent", None)]
         table.append(row)
 
     # Append statistics to the table
-    table.append([None, None, None, None, None, None])
-    for k, v in sorted(Options.ITEMS_COUNT.items(), key=lambda v: v[1], reverse=True):
-        table.append([f"Sum of {k}:",None, None, f"{v:,d}", None, None, None])
+    table = table_statistics(table, is_consistent, sum_item_count, secondary_itemcount)
 
-    item_sum = sum(list(Options.ITEMS_COUNT.values()))
-    debug(item_sum)
-    table.append([None, None, None, None, None, None])
-
-    checksum = 0 if sum_item_count == item_sum else f"Count mismatch {item_sum:,d}/{sum_item_count:,d})"
-    table.append(["Sum of all items:", None, None,
-                  f"{sum_item_count:,d}" if sum_item_count > 0 else None,
-                  f"{checksum:,d}" if checksum > 0 else None, None, None])
-
-    debug("Results ITEM_COUNT", Options.ITEMS_COUNT)
-    debug("Results from rows", secondary_itemcount)
-    if not is_consitent:
-        result = check_consistency(Options.ITEMS_COUNT, secondary_itemcount)
-        debug("Null mismatch =", result)
-
-        if result is True:
-            level = "INFO:"
-            msg = ["Inconsistent data detected.", "Most likely from occasional 'null' values."]
-        else:
-            level = "WARNING:"
-            msg = ["Inconsistent data detected.", "Most likely due to mixed types in json values"]
-        table.append([level, None, None, None, msg[0], None, None])
-        table.append([None, None, None, None, msg[1], None, None])
     return table
 
 def output(table):
@@ -745,7 +766,7 @@ def debug(*args):
         'DEBUG: arg[0] --- arg[...] --- arg[n] :::END'
     Return:
         None"""
-    if Options.DEBUG:
+    if Options.is_debug():
         print("DEBUG: ", end="")
         for a in args:
 
