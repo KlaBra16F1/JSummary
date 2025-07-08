@@ -1,5 +1,5 @@
 """Some tests"""
-from JSummary import get_input, check_date_time, adjust_json_type, RE_URL, RE_FILE
+from jsummary import get_input, check_date_time, adjust_json_type, RE_URL, RE_FILE
 
 def test_get_url():
     """Testing regex detection."""
@@ -9,7 +9,7 @@ def test_get_url():
     assert get_input(RE_FILE, "./myfolder/my.json") == "./myfolder/my.json"
     assert get_input(RE_FILE, "..\\my.json") == "..\\my.json"
     assert get_input(RE_FILE, "test.txt") is None
-    
+
 def test_check_date_time():
     """Testing propper date, date-time detection"""
     assert check_date_time("2025-12-14") == "date"

@@ -136,13 +136,13 @@ def user_input(func):
         input_check - bool: Signal if while loop can be stopped.
     """
     def wrapped(*args):
+        """The Loop for the decorator"""
         input_check = False
         while input_check is False:
             input_user, input_check = func(*args)
-            if input_check:
-                return input_user
-            else:
-                continue
+
+        return input_user
+
     return wrapped
 
 @user_input
@@ -164,7 +164,9 @@ def get_input(verify: tuple, source= None):
     prompt = verify[0]
     error_message = verify[1]
     pattern = verify[2]
-    cmd = True if source else False
+
+    cmd = bool(source)
+
     # If url is from cli-flags, second True is returned either way to escape loop.
     if cmd:
         check = re.search(pattern, source)
@@ -174,24 +176,25 @@ def get_input(verify: tuple, source= None):
             return None, True
         return source, True
     # Else get interactive user input
-    else:
-        if Options.CNT == 0:
-            print("User input or 'q' to exit")
-        try:
-            source = input(prompt)
-            check = re.search(pattern, source)
-            if source == "q":
-                return None, True
-            if not check:
-                print(error_message)
-                Options.CNT += 1
-                return None, False
-            else:
-                Options.CNT = 0
-                return source, True
-        except EOFError:
-            print("\nUser interrupted input.")
+
+    if Options.CNT == 0:
+        print("User input or 'q' to exit")
+
+    try:
+        source = input(prompt)
+        check = re.search(pattern, source)
+        if source == "q":
             return None, True
+        if not check:
+            print(error_message)
+            Options.CNT += 1
+            return None, False
+
+        Options.CNT = 0
+        return source, True
+    except EOFError:
+        print("\nUser interrupted input.")
+        return None, True
 
 def get_user_input():
     """Collects neccessary user input for file and url input"""
@@ -254,7 +257,7 @@ def check_date_time(s: str):
     if re.search(pattern_date_time, s):
         return "date-time"
     if re.search(pattern_time, s):
-        return("time")
+        return "time"
     return "string"
 
 
@@ -294,16 +297,67 @@ def check_consistency(a: dict, b: dict):
     for k, v in a.items():
         difference[k] = v - b.get(k, 0)
     nulls = abs(difference.get("null", 0))
-    rest = sum([abs(v) for (k, v) in difference.items() if k != "null"])
+    rest = sum(abs(v) for (k, v) in difference.items() if k != "null")
     debug("Difference", difference)
     return nulls == rest
 
 # Program
 def load_config():
     """Loads commandline arguments and verifies input"""
-        # Make global for changes
 
+    args = parse_args()
+    Options.DEBUG = args.debug
 
+    # Checks and changes
+
+    if args.file or args.url:
+        Options.INTERACTIVE = False
+        if args.file:
+            # Verification filename or path
+            Options.FILE = get_input(RE_FILE, args.file)
+            Options.URL = None
+            Options.HEADERS = None
+        elif args.url:
+            # Verification url
+            Options.URL = get_input(RE_URL, args.url)
+            Options.FILE = None
+    elif args.file and args.url:
+        sys.exit("Error: You can either load a local json file or a remote one.")
+
+    # Verify commandline arguments
+    if args.header:
+        try:
+            temp_headers = literal_eval(args.header)
+            for k, v in temp_headers.items():
+                Options.HEADERS.update({k: v})
+        except ValueError:
+            print("Error: Invalid headers. Check for single and double quotes.\n")
+            print("Trying default headers instead.")
+
+    Options.OUTPUT = args.output if args.output else Options.OUTPUT
+    # Making sure, that indent is off for csv
+    if Options.OUTPUT.endswith(".csv"):
+        Options.INDENT = ""
+
+    # Setting the rest of the cli arguments if available
+    Options.SYMBOL_ARRAY = args.array if args.array else Options.SYMBOL_ARRAY
+    Options.SYMBOL_ARRAY_ITEM = args.arrayitem if args.arrayitem else Options.SYMBOL_ARRAY_ITEM
+    Options.SYMBOL_OBJECT = args.object if args.object else Options.SYMBOL_OBJECT
+    Options.INDENT = args.indent if args.indent else Options.INDENT
+    Options.MASK = args.mask if args.mask else Options.MASK
+    Options.TRIM = args.trim if args.trim else Options.TRIM
+    Options.REQUEST_TIMEOUT = args.timeout if args.timeout else Options.REQUEST_TIMEOUT
+    Options.CSV_DELIMITER = args.delimiter if args.delimiter else Options.CSV_DELIMITER
+
+    # Get redacted keys
+    if args.redacted:
+        for a in args.redacted:
+            Options.REDACTED.append(a)
+
+    print("Success: Loading commandline arguments:")
+
+def parse_args():
+    """Loader for commanline arguments. Returns args."""
     parser = argparse.ArgumentParser(description="Get a summary of a local or remote json file.")
     # Base arguments
     parser.add_argument("-i", "--interactive", action="store_true", default="true",
@@ -345,65 +399,7 @@ def load_config():
                         help="Add a custom timeout for http requests")
     parser.add_argument("-D", "--debug", action="store_true", default=False,
                         help="Enable debug comments. Not fully implemented yet.")
-    args = parser.parse_args()
-    Options.DEBUG = args.debug
-
-    # Checks and changes
-
-    if args.file or args.url:
-        Options.INTERACTIVE = False
-        if args.file:
-            # Verification filename or path
-            Options.FILE = get_input(RE_FILE, args.file)
-            Options.URL = None
-            Options.HEADERS = None
-        if args.url:
-            # Verification url
-            Options.URL = get_input(RE_URL, args.url)
-            Options.FILE = None
-    elif args.file and args.url:
-        print("Error: You can either load a local json file or a remote one.")
-        sys.exit(parser.print_usage())
-
-    # Verify commandline arguments
-    if args.header:
-        try:
-            temp_headers = literal_eval(args.header)
-            for k, v in temp_headers.items():
-                Options.HEADERS.update({k: v})
-        except ValueError:
-            print("Error: Invalid headers. Check for single and double quotes.\n")
-            print("Trying default headers instead.")
-
-    Options.OUTPUT = args.output if args.output else Options.OUTPUT
-    # Making sure, that indent is off for csv
-    if Options.OUTPUT.endswith(".csv"):
-        Options.INDENT = ""
-
-    # Setting the rest of the cli arguments if available
-    Options.SYMBOL_ARRAY = args.array if args.array else Options.SYMBOL_ARRAY
-    Options.SYMBOL_ARRAY_ITEM = args.arrayitem if args.arrayitem else Options.SYMBOL_ARRAY_ITEM
-    Options.SYMBOL_OBJECT = args.object if args.object else Options.SYMBOL_OBJECT
-    Options.INDENT = args.indent if args.indent else Options.INDENT
-    Options.MASK = args.mask if args.mask else Options.MASK
-    Options.TRIM = args.trim if args.trim else Options.TRIM
-    Options.REQUEST_TIMEOUT = args.timeout if args.timeout else Options.REQUEST_TIMEOUT
-    Options.CSV_DELIMITER = args.delimiter if args.delimiter else Options.CSV_DELIMITER
-
-    # Get redacted keys
-    if args.redacted:
-        for a in args.redacted:
-            Options.REDACTED.append(a)
-
-    # Finall Test
-    if (Options.FILE or Options.URL) and not (Options.FILE and Options.URL) and Options.OUTPUT:
-        print()
-        print("Success: Loading commandline arguments:")
-    elif Options.INTERACTIVE:
-        pass
-    else:
-        print("Error: Invalid configuration")
-        sys.exit(parser.print_usage())
+    return parser.parse_args()
 
 def load_from_file(file: str):
     """Loads and parses a local json file
@@ -420,7 +416,7 @@ def load_from_file(file: str):
             jsn = f.read()
             print("Success: File loaded")
     except FileNotFoundError:
-        sys.exit(f"File not found in {f}")
+        sys.exit(f"File not found in {file}")
     try:
         jsn = json.loads(jsn)
         print("Success: JSON decoded from file")
@@ -443,8 +439,8 @@ def load_from_url(url):
         if req.status_code != 200:
             print(f"Error: Status {req.status_code}")
             return None
-        else:
-            print(f"Sucess: Loading Data from {Options.URL}")
+
+        print(f"Sucess: Loading Data from {Options.URL}")
 
     except requests.HTTPError as e:
         print(f"Error: {e.args[0]}")
@@ -486,8 +482,8 @@ def get_json_tree(data, path=""):
             if Options.SYMBOL_ARRAY not in path_parent[i]:
                 parent = path_parent[i]
                 break
-            else:
-                parent = ""
+
+            parent = ""
     # Lists / Arrays
     if isinstance(data, list):
         Options.TREE[path + dot + Options.SYMBOL_ARRAY] = {"type": current_type,
@@ -673,11 +669,15 @@ def get_summary_table(json_summary):
     table.append([None, None, None, None, None, None])
     for k, v in sorted(Options.ITEMS_COUNT.items(), key=lambda v: v[1], reverse=True):
         table.append([f"Sum of {k}:",None, None, f"{v:,d}", None, None, None])
-    item_sum = sum([c for c in Options.ITEMS_COUNT.values()])
+
+    item_sum = sum(list(Options.ITEMS_COUNT.values()))
+    debug(item_sum)
     table.append([None, None, None, None, None, None])
 
-    checksum = 0 if sum_item_count == item_sum else f"Count mismatch ({item_sum:,d}/{sum_item_count:,d})"
-    table.append(["Sum of all items:", None, None, f"{sum_item_count:,d}" if sum_item_count > 0 else None, f"{checksum:,d}" if checksum > 0 else None, None, None])
+    checksum = 0 if sum_item_count == item_sum else f"Count mismatch {item_sum:,d}/{sum_item_count:,d})"
+    table.append(["Sum of all items:", None, None,
+                  f"{sum_item_count:,d}" if sum_item_count > 0 else None,
+                  f"{checksum:,d}" if checksum > 0 else None, None, None])
 
     debug("Results ITEM_COUNT", Options.ITEMS_COUNT)
     debug("Results from rows", secondary_itemcount)
@@ -706,7 +706,7 @@ def output(table):
         case c if Options.OUTPUT.endswith(".txt"):
             output_text(table, TBLFMT_TXT)
         case _:
-            print(tabulate(table, headers="firstrow", 
+            print(tabulate(table, headers="firstrow",
                            tablefmt=TBLFMT_SCREEN, preserve_whitespace=True))
     debug(c)
 
