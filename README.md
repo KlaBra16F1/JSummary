@@ -26,6 +26,7 @@ Or read through all available commandline options:
 ```bash
 python jsummary.py -h
 ```
+Jsummary officially supports Python3.10+.
 
 ## Usage
 
