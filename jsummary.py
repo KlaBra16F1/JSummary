@@ -13,12 +13,12 @@ from tabulate2 import tabulate
 RE_URL = ("Enter URL ('https://example.com/endpoint'): ",
           "Invalid url",
           r"^https?://.+")
-RE_FILE = ("Enter filename or path ('./myfolder/my.json'): ",
+RE_FILE = ("Enter input filename or path ('./myfolder/my.json'): ",
           "Invalid filename or path",
           r"^(?:\.{1,2}\/|\.{1,2}\\)?(?:\w|\d)*(?:\w|\d|\.|\/|\\)*?(?:\w|\d)+\.json$")
-RE_HEADERS = ("Enter header(s) ('key : value') - 'CTRL-D' when done: ",
-              "Invalid input", "^.+ :{1} .+$")
-RE_OUTPUT = ("Enter filename or path (can be .csv, .txt, .md or 'CTRL-D for screen'): ",
+RE_HEADERS = ("Enter header(s) ('key : value') - 'ENTER' when done: ",
+              "Invalid input", r"^[\w\W]+:{1}.+$")
+RE_OUTPUT = ("Enter output filename or path (can be .csv, .txt, .md or 'ENTER' for screen): ",
           "Invalid filename or path",
           r"^(?:\.{1,2}/|\.{1,2}\\)?(?:\w|\d)+(?:\w|\d|/|\\)*(?:\w|\d)+(\.csv|\.txt|\.md)$")
 
@@ -122,11 +122,11 @@ def main():
     print("\nSuccess: Summary complete.\n")
 
     if Options.INTERACTIVE:
-        str_input = f"-f {Options.FILE}" if Options.FILE else f"-u {Options.URL}"
+        str_input = f"-f {Options.FILE}" if Options.FILE else f"-u '{Options.URL}'"
         str_output = f"-o {Options.OUTPUT}" if Options.OUTPUT != "screen" else " "
         str_header = f"-H \"{Options.HEADERS}\"" if Options.URL and len(Options.HEADERS) > 1 else ""
         print("The commandline prompt for your request is:\n",
-              f"\tpython jspn_summary.py {str_input} {str_output} {str_header}",
+              f"\tpython jsummary.py {str_input} {str_output} {str_header}",
               "\n\nRun 'python json_summary.py -' for more options.\n")
 
 # Input & Verification
@@ -183,12 +183,12 @@ def get_input(verify: tuple, source= None):
     # Else get interactive user input
 
     if Options.CNT == 0:
-        print("User input or 'q' to exit")
+        print("User input or 'q' to quit")
 
     try:
         source = input(prompt)
         check = re.search(pattern, source)
-        if source == "q":
+        if source in ["q",""]:
             return None, True
         if not check:
             print(error_message)
@@ -209,12 +209,16 @@ def get_user_input():
             match choice:
                 case "f":
                     Options.FILE = get_input(RE_FILE)
+                    if not Options.FILE:
+                        sys.exit("Error: Can't continue without an input file. Exiting...")
                     Options.OUTPUT = get_input(RE_OUTPUT)
                     if Options.OUTPUT is None:
                         Options.OUTPUT = "screen"
                     break
                 case "u":
                     Options.URL = get_input(RE_URL)
+                    if not Options.URL:
+                        sys.exit("Error: Can't continue without a url. Exitting...")
                     get_headers()
                     Options.OUTPUT = get_input(RE_OUTPUT)
 
@@ -228,23 +232,24 @@ def get_user_input():
 
 def get_headers():
     """Sub function of get_user_input(). Lists all available headers,
-    calls get_inout() and repeats until exit with 'CTRL-D'"""
-    header = " "
+    calls get_inout() and repeats until exit with 'ENTER'"""
+    header = ""
     while header is not None:
         print("Current headers:")
         for k,v in Options.HEADERS.items():
             print(f"\t{k}: {v}")
         print()
         header = get_input(RE_HEADERS)
-        if header:
-            header = header.split(" ")
-            if len(header) == 3:
-                print(f"Adding {header[0]}: {header[2]} to headers\n")
-                Options.HEADERS.update({header[0]: header[2]})
-            else:
-                print("Error: Couldn't add header. Make sure you leave a",
-                      "space before and after ' : '")
-                header = None
+        if header and ":" in header:
+            h1= str(header[:header.index(":")]).strip()
+            h2 = str(header[header.index(":") + 1:]).strip()
+
+            print(f"Adding {h1}: {h2} to headers\n")
+            Options.HEADERS.update({h1: h2})
+        # else:
+        #         print("Error: Couldn't add header. Make sure you leave a",
+        #               "space before and after ' : '")
+        #         header = None
 
 def check_date_time(s: str):
     """Detects date, date-time and time patterns in a string
@@ -524,8 +529,10 @@ def load_from_url(url):
         print(f"Error: {e.args[0]}")
         return None
     except (requests.ConnectTimeout, requests.ConnectionError, requests.ReadTimeout):
-        print(f"Error: Timeout from {Options.URL}")
-        return None
+        print(f"Error: Timeout from {Options.URL}." +
+              "Curent settin is {Options.REQUEST_TIMEOUT} seconds.\n" +
+              "Maybe try to increase '--timeout' in the commandline options.")
+        sys.exit("Exiting...")
 
     try:
         print("Success: Parsing json data")
