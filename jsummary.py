@@ -15,7 +15,7 @@ RE_URL = ("Enter URL ('https://example.com/endpoint'): ",
           r"^https?://.+")
 RE_FILE = ("Enter input filename or path ('./myfolder/my.json'): ",
           "Invalid filename or path",
-          r"^(?:\.{1,2}\/|\.{1,2}\\)?(?:\w|\d)*(?:\w|\d|\.|\/|\\)*?(?:\w|\d)+\.json$")
+          r"^(?:\.{1,2}\/|\.{1,2}\\)?(?:\w|\d)*(?:\w|\d|\.|\/|\\)*?(?:\w|\d|\W)+\.json$")
 RE_HEADERS = ("Enter header(s) ('key : value') - 'ENTER' when done: ",
               "Invalid input", r"^[\w\W]+:{1}.+$")
 RE_OUTPUT = ("Enter output filename or path (can be .csv, .txt, .md or 'ENTER' for screen): ",
@@ -177,7 +177,6 @@ def get_input(verify: tuple, source= None):
         check = re.search(pattern, source)
         if not check:
             print(error_message)
-            print("dbg", re.search(pattern, source), source)
             return None, True
         return source, True
     # Else get interactive user input
@@ -326,20 +325,19 @@ def table_statistics(table, is_consistent, sum_item_count, secondary_itemcount):
 
         item_sum = sum(list(Options.ITEMS_COUNT.values()))
         debug(item_sum)
-        table.append([None, None, None, None, None, None])
 
         checksum = 0 if sum_item_count == item_sum else ("Count mismatch" +
                                                          f"{item_sum:,d}/{sum_item_count:,d}")
-        table.append(["Sum of all items:", None, None,
-                    f"{sum_item_count:,d}" if sum_item_count > 0 else None,
-                    f"{checksum:,d}" if checksum > 0 else None, None, None])
-
-        debug("Results ITEM_COUNT", Options.ITEMS_COUNT)
-        debug("Results from rows", secondary_itemcount)
-        if not is_consistent:
-            level, msg = check_consistency(Options.ITEMS_COUNT, secondary_itemcount)
-            table.append([level, None, None, None, msg[0], None, None])
-            table.append([None, None, None, None, msg[1], None, None])
+        
+    table.append(["Sum of all items:", None, None,
+                f"{sum_item_count:,d}" if sum_item_count > 0 else None,
+                f"{checksum:,d}" if checksum > 0 else None, None, None])
+    debug("Results ITEM_COUNT", Options.ITEMS_COUNT)
+    debug("Results from rows", secondary_itemcount)
+    if not is_consistent:
+        level, msg = check_consistency(Options.ITEMS_COUNT, secondary_itemcount)
+        table.append([level, None, None, None, msg[0], None, None])
+        table.append([None, None, None, None, msg[1], None, None])
     return table
 
 def get_parent(path: str):
@@ -398,11 +396,15 @@ def load_config():
         if args.file:
             # Verification filename or path
             Options.FILE = get_input(RE_FILE, args.file)
+            if not Options.FILE:
+                sys.exit("Error: Not a valid input file. Exiting...")
             Options.URL = None
             Options.HEADERS = None
         elif args.url:
             # Verification url
             Options.URL = get_input(RE_URL, args.url)
+            if not Options.URL:
+                sys.exit("Error: Not a valid url. Exiting...")
             Options.FILE = None
     elif args.file and args.url:
         sys.exit("Error: You can either load a local json file or a remote one.")
