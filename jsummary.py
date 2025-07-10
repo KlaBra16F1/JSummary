@@ -328,7 +328,7 @@ def table_statistics(table, is_consistent, sum_item_count, secondary_itemcount):
 
         checksum = 0 if sum_item_count == item_sum else ("Count mismatch" +
                                                          f"{item_sum:,d}/{sum_item_count:,d}")
-        
+
     table.append(["Sum of all items:", None, None,
                 f"{sum_item_count:,d}" if sum_item_count > 0 else None,
                 f"{checksum:,d}" if checksum > 0 else None, None, None])
